@@ -1,0 +1,30 @@
+{
+  "name": "pkg-verify",
+  "version": "0.0.0",
+  "description": "Package verifier",
+  "keywords": [
+    "pkg",
+    "package",
+    "package.json",
+    "deps",
+    "dependencies",
+    "verify"
+  ],
+  "license": "MIT",
+  "repository": "git://github.com/chjj/pkg-verify.git",
+  "homepage": "https://github.com/chjj/pkg-verify",
+  "bugs": {
+    "url": "https://github.com/chjj/pkg-verify/issues"
+  },
+  "author": "Christopher Jeffrey <chjjeffrey@gmail.com>",
+  "main": "./lib/pkg-verify.js",
+  "scripts": {
+    "lint": "eslint lib/ test/ || exit 0"
+  },
+  "devDependencies": {
+    "eslint": "^4.14.0"
+  },
+  "browser": {
+    "./lib/verify": "./lib/verify-browser.js"
+  }
+}
