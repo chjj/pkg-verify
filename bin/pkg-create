@@ -1,0 +1,305 @@
+#!/usr/bin/env node
+
+'use strict';
+
+if (process.argv.length < 4) {
+  console.error('Must supply path to module.');
+  console.error('Usage:');
+  console.error('  $ pkg-create [moddir] [destination]');
+  console.error('  $ pkg-create ~/my-app ~/my-app.tar.gz');
+  process.exit(1);
+}
+
+const Path = require('path');
+const fs = require('bfile');
+const os = require('os');
+const cp = require('child_process');
+const verify = require('../');
+
+const PREFIX = Path.resolve(os.homedir(), '.pkg-verify');
+
+const defaultIgnore = new Set([
+  '.babelrc',
+  '.circleci',
+  '.dntrc',
+  '.editorconfig',
+  '.eslintfiles',
+  '.eslintrc',
+  '.eslintrc.json',
+  '.git',
+  '.gitattributes',
+  '.gitconfig',
+  '.gitignore',
+  '.npmignore',
+  '.travis.yml',
+  'CHANGELOG',
+  'CHANGELOG.md',
+  'ChangeLog',
+  'INSTALL',
+  'NEWS',
+  'README',
+  'README.md',
+  'TODO.md',
+  'TODO',
+  'bench',
+  'browser',
+  'build',
+  'doc',
+  'docs',
+  'example',
+  'examples',
+  'jsdoc.json',
+  'migrate',
+  'node_modules',
+  'npm-debug.log',
+  'package-lock.json',
+  'scripts', // XXX
+  'snap',
+  'test',
+  'tools',
+  'webpack.app.js',
+  'webpack.browser.js',
+  'webpack.compat.js',
+  'webpack.config.js'
+]);
+
+class IgnoreList {
+  constructor() {
+    this.map = new Set();
+    this.globs = [];
+  }
+
+  async read(dir) {
+    await this._read(dir, '.npmignore');
+    await this._read(dir, '.gitignore');
+  }
+
+  async _read(dir, name) {
+    const file = Path.resolve(dir, name);
+
+    let text;
+
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      if (e.code === 'ENOENT')
+        return;
+
+      throw e;
+    }
+
+    const lines = text.trim().split(/(\r\n|\r|\n)+/);
+
+    for (const line of lines)
+      this.add(line);
+
+    return this;
+  }
+
+  add(line) {
+    const rule = line.trim().replace(/^\/+|\/+$/g, '');
+
+    if (rule.indexOf('*') !== -1) {
+      let rx = line;
+
+      // **
+      rx = rx.replace(/\/\*\*\//g, '/?[^\0]*?/?');
+      rx = rx.replace(/\*\*\//g, '[^\0]*?/?');
+      rx = rx.replace(/\/\*\*/g, '/?[^\0]*?');
+      rx = rx.replace(/\*\*/g, '[^\0]*?');
+
+      // *
+      rx = rx.replace(/\/\*/g, '/?[^/]*?');
+      rx = rx.replace(/\*/g, '[^/]*');
+
+      // escaping
+      rx = rx.replace(/\./g, '\\.');
+
+      this.globs.push(new RegExp('^' + rx + '$'));
+    } else {
+      if (rule.length > 0)
+        this.map.add(rule);
+    }
+
+    return this;
+  }
+
+  has(name) {
+    if (this.map.has(name))
+      return true;
+
+    for (const glob of this.globs) {
+      if (glob.test(name))
+        return true;
+    }
+
+    if (defaultIgnore.has(name))
+      return true;
+
+    return false;
+  }
+}
+
+async function mkdir(dirname) {
+  // console.log(`$ mkdir ${dirname}`);
+  return fs.mkdir(dirname, 0o755);
+}
+
+async function mkdirp(dirname) {
+  // console.log(`$ mkdir -p ${dirname}`);
+  return fs.mkdirp(dirname, 0o755);
+}
+
+async function copyFile(from, to) {
+  // console.log(`$ cp ${from} ${to}`);
+  return fs.copyFile(from, to, fs.constants.COPYFILE_EXCL);
+}
+
+async function tar(tarball, dir) {
+  console.log(`Creating tarball: ${tarball}`);
+
+  const name = Path.basename(dir);
+  const cwd = dir.slice(0, -name.length).replace(/\/+$/g, '');
+
+  // console.log(`$ tar -czf ${tarball} ${dir}`);
+  // return;
+
+  return new Promise((resolve, reject) => {
+    const cb = (err, stdout, stderr) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      resolve([stdout, stderr]);
+    };
+
+    const args = [
+      '-czf',
+      tarball,
+      name
+    ];
+
+    const options = {
+      cwd
+    };
+
+    try {
+      cp.execFile('tar', args, options, cb);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+async function copyModule(from, to) {
+  const ignore = new IgnoreList();
+
+  await ignore.read(from);
+
+  console.log(`Copying module: ${Path.basename(from)}.`);
+
+  return copyDir(from, to, ignore, '');
+}
+
+async function copyDir(from, to, ignore, top) {
+  const list = await fs.readdir(from);
+
+  await mkdir(to);
+
+  for (const name of list) {
+    const path = Path.join(from, name);
+    const dest = Path.join(to, name);
+    const stat = await fs.lstat(path);
+
+    const current = Path.join(top, name);
+
+    if (ignore.has(current))
+      continue;
+
+    if (stat.isDirectory()) {
+      await copyDir(path, dest, ignore, current);
+    } else {
+      if (!stat.isFile())
+        continue;
+
+      await copyFile(path, dest);
+    }
+  }
+}
+
+function createBuild(modules, dir) {
+  const name = Path.basename(dir);
+
+  let str = '';
+
+  str += '#!/bin/bash\n';
+  str += '\n';
+  str += 'set -ex\n';
+  str += '\n';
+  str += 'if test ! -e build.sh || test ! -e package.json; then\n';
+  str += '  echo "Wrong directory for build!" >& 2\n';
+  str += '  exit 1\n';
+  str += 'fi\n';
+
+  for (const mod of modules) {
+    str += '\n';
+
+    if (mod === name) {
+      str += `if test -e binding.gyp; then\n`;
+      str += `  node-gyp rebuild\n`;
+      str += 'fi\n';
+    } else {
+      str += `if test -e node_modules/${mod}/binding.gyp; then\n`;
+      str += `  pushd node_modules/${mod}\n`;
+      str += `  node-gyp rebuild\n`;
+      str += '  popd\n';
+      str += 'fi\n';
+    }
+  }
+
+  return str;
+}
+
+async function writeBuild(modules, dir) {
+  const file = Path.resolve(dir, 'build.sh');
+  const txt = createBuild(modules, dir);
+
+  return fs.writeFile(file, txt, {
+    encoding: 'utf8',
+    mode: 0o755
+  });
+}
+
+(async () => {
+  const path = Path.resolve(process.cwd(), process.argv[2]);
+  const tarball = Path.resolve(process.cwd(), process.argv[3]);
+  const dirname = Path.dirname(path);
+  const name = Path.basename(path);
+  const prefix = Path.resolve(PREFIX, name + '-' + Date.now().toString(16));
+  const dest = Path.resolve(prefix, name);
+
+  await mkdirp(prefix);
+
+  const v = verify.stop(dirname, name, true);
+
+  const paths = v.getPaths();
+  const moddir = paths.shift();
+
+  await copyModule(moddir, dest);
+  await mkdir(Path.resolve(dest, 'node_modules'));
+
+  for (const path of paths) {
+    const modname = Path.basename(path);
+    const newdest = Path.resolve(dest, 'node_modules', modname);
+
+    await copyModule(path, newdest);
+  }
+
+  await writeBuild(v.getBindings(), dest);
+
+  await tar(tarball, dest);
+})().catch((err) => {
+  console.error(err.message);
+  process.exit(1);
+});
