@@ -16,15 +16,21 @@
   "bugs": {
     "url": "https://github.com/chjj/pkg-verify/issues"
   },
+  "engines": {
+    "node": ">=8.0.0"
+  },
   "author": "Christopher Jeffrey <chjjeffrey@gmail.com>",
   "main": "./lib/pkg-verify.js",
   "scripts": {
     "lint": "eslint lib/ test/ || exit 0"
   },
   "devDependencies": {
-    "eslint": "^4.18.2"
+    "eslint": "^5.1.0"
   },
   "browser": {
     "./lib/verify": "./lib/verify-browser.js"
+  },
+  "dependencies": {
+    "bsert": "~0.0.4"
   }
 }
