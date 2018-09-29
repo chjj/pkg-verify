@@ -24,9 +24,7 @@
   "scripts": {
     "lint": "eslint lib/ test/ || exit 0"
   },
-  "devDependencies": {
-    "eslint": "^5.1.0"
-  },
+  "devDependencies": {},
   "browser": {
     "./lib/verify": "./lib/verify-browser.js"
   },
