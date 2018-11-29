@@ -29,6 +29,6 @@
     "./lib/verify": "./lib/verify-browser.js"
   },
   "dependencies": {
-    "bsert": "~0.0.4"
+    "bsert": "~0.0.5"
   }
 }
